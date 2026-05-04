@@ -1,3 +1,3 @@
-from nomad_reprocessing_plugin.actions.simple_action import simple_action_entry_point
+from nomad_reprocessing_plugin.actions.reprocess_uploads_action import reprocess_uploads_action_entry_point
 
-__all__ = ['simple_action_entry_point']
+__all__ = ['reprocess_uploads_action_entry_point']

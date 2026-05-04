@@ -135,7 +135,7 @@ where = ["src"]
 
 
 
-action_entry_point = "nomad_reprocessing_plugin.actions:simple_action_entry_point"
+action_entry_point = "nomad_reprocessing_plugin.actions:reprocess_uploads_action_entry_point"
 
 [tool.cruft]
 # Avoid updating workflow files, this leads to permissions issues
