@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ReprocessUploadsWorkflowInput(BaseModel):
@@ -12,8 +12,18 @@ class ReprocessUploadsWorkflowInput(BaseModel):
         ..., description='Unique identifier for the user who initiated the workflow.'
     )
     upload_ids: list[str] = Field(
-        ..., description='List of upload identifiers to reprocess one by one.'
+        ...,
+        description='List of upload identifiers to reprocess one by one. Can be provided as a Python list or comma-separated string.',
     )
+
+    @field_validator('upload_ids', mode='before')
+    @classmethod
+    def parse_upload_ids(cls, v):
+        """Parse upload_ids from either list or comma-separated string."""
+        if isinstance(v, str):
+            # Accept comma-separated string and convert to list
+            return [upload_id.strip() for upload_id in v.split(',') if upload_id.strip()]
+        return v  # Already a list
 
 
 class ReprocessSingleUploadInput(BaseModel):
@@ -33,5 +43,15 @@ class BuildReprocessSummaryInput(BaseModel):
         ..., description='Workflow identifier used to name the summary JSON file.'
     )
     upload_ids: list[str] = Field(
-        ..., description='List of upload identifiers that were reprocessed.'
+        ...,
+        description='List of upload identifiers that were reprocessed. Can be provided as a Python list or comma-separated string.',
     )
+
+    @field_validator('upload_ids', mode='before')
+    @classmethod
+    def parse_upload_ids(cls, v):
+        """Parse upload_ids from either list or comma-separated string."""
+        if isinstance(v, str):
+            # Accept comma-separated string and convert to list
+            return [upload_id.strip() for upload_id in v.split(',') if upload_id.strip()]
+        return v  # Already a list
