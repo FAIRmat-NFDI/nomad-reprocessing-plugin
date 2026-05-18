@@ -1,6 +1,28 @@
 from pydantic import BaseModel, Field, field_validator
 
 
+def parse_upload_id_list(value: str | list[str]) -> list[str]:
+    """Parse upload IDs from either a Python list or comma-separated string.
+
+    Args:
+        value: Either a list of upload IDs or a comma-separated string
+
+    Returns:
+        List of upload ID strings with whitespace trimmed
+
+    Examples:
+        >>> parse_upload_id_list(['id1', 'id2'])
+        ['id1', 'id2']
+        >>> parse_upload_id_list('id1, id2, id3')
+        ['id1', 'id2', 'id3']
+        >>> parse_upload_id_list('id1,,,id2')
+        ['id1', 'id2']
+    """
+    if isinstance(value, str):
+        return [upload_id.strip() for upload_id in value.split(',') if upload_id.strip()]
+    return value
+
+
 class ReprocessUploadsWorkflowInput(BaseModel):
     """Input model for reprocessing multiple uploads."""
 
@@ -18,12 +40,9 @@ class ReprocessUploadsWorkflowInput(BaseModel):
 
     @field_validator('upload_ids', mode='before')
     @classmethod
-    def parse_upload_ids(cls, v):
+    def validate_upload_ids(cls, v):
         """Parse upload_ids from either list or comma-separated string."""
-        if isinstance(v, str):
-            # Accept comma-separated string and convert to list
-            return [upload_id.strip() for upload_id in v.split(',') if upload_id.strip()]
-        return v  # Already a list
+        return parse_upload_id_list(v)
 
 
 class ReprocessSingleUploadInput(BaseModel):
@@ -49,9 +68,6 @@ class BuildReprocessSummaryInput(BaseModel):
 
     @field_validator('upload_ids', mode='before')
     @classmethod
-    def parse_upload_ids(cls, v):
+    def validate_upload_ids(cls, v):
         """Parse upload_ids from either list or comma-separated string."""
-        if isinstance(v, str):
-            # Accept comma-separated string and convert to list
-            return [upload_id.strip() for upload_id in v.split(',') if upload_id.strip()]
-        return v  # Already a list
+        return parse_upload_id_list(v)
