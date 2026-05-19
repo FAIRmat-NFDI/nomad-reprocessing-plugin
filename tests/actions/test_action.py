@@ -172,14 +172,62 @@ async def test_build_reprocess_summary_activity(monkeypatch):
     ) == {
         'u1': {
             'status': 'SUCCESS',
+            'stats': {
+                'total_entries': 2,
+                'successful': 2,
+                'failed': 0,
+                'total_errors': 0,
+                'total_warnings': 0,
+                'total_info': 1,
+                'total_debug': 0,
+                'total_critical': 0,
+            },
             'entries': [
-                {'entry_id': 'u1-e1', 'logs': ['u1-entry-log']},
+                {
+                    'entry_id': 'u1-e1',
+                    'mainfile': '',
+                    'parser': '',
+                    'status': 'UNKNOWN',
+                    'log_stats': {
+                        'ERROR': 0,
+                        'WARNING': 0,
+                        'INFO': 1,
+                        'DEBUG': 0,
+                        'CRITICAL': 0,
+                    },
+                    'processing_errors': [],
+                    'logs': ['u1-entry-log'],
+                },
             ],
         },
         'u2': {
             'status': 'SUCCESS',
+            'stats': {
+                'total_entries': 2,
+                'successful': 2,
+                'failed': 0,
+                'total_errors': 0,
+                'total_warnings': 0,
+                'total_info': 1,
+                'total_debug': 0,
+                'total_critical': 0,
+            },
             'entries': [
-                {'entry_id': 'u2-e1', 'logs': ['u2-entry-log']},
+                {
+                    'entry_id': 'u2-e1',
+                    'mainfile': '',
+                    'parser': '',
+                    'status': 'UNKNOWN',
+                    'log_stats': {
+                        'ERROR': 0,
+                        'WARNING': 0,
+                        'INFO': 1,
+                        'DEBUG': 0,
+                        'CRITICAL': 0,
+                    },
+                    'processing_errors': [],
+                    'logs': ['u2-entry-log'],
+                },
             ],
         },
     }
