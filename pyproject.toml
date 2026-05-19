@@ -25,7 +25,7 @@ maintainers = [
 ]
 license = { file = "LICENSE" }
 dependencies = [
-    "nomad-lab>=1.4.1",
+    "nomad-lab[infrastructure]>=1.4.1",
     "pydantic",
     "temporalio",
 ]
