@@ -60,7 +60,7 @@ Access the reprocessing action from the upload page action menu (if GUI integrat
 ### Architecture
 
 The reprocessing action uses Temporal workflows to:
-1. Process uploads sequentially on the CPU task queue
+1. Spawns upload processing tasks sequentially on the CPU task queue
 2. Poll each upload until processing completes
 3. Generate a summary report with processing results
 
