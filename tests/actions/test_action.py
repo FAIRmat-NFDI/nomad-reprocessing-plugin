@@ -297,12 +297,12 @@ async def test_reprocess_uploads_workflow(monkeypatch):
                     {
                         'upload_id': 'u1',
                         'status': 'SUCCESS',
-                        'entry_status': '2 success, 0 failures',
+                        'entry_status': '3 success, 0 failures',
                     },
                     {
                         'upload_id': 'u2',
                         'status': 'SUCCESS',
-                        'entry_status': '2 success, 0 failures',
+                        'entry_status': '4 success, 0 failures',
                     },
                 ]
             }
