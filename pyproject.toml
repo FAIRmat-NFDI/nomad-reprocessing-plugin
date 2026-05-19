@@ -25,7 +25,6 @@ maintainers = [
 ]
 license = { file = "LICENSE" }
 dependencies = [
-    "nomad-gui>=2.0.0a2.dev488",
     "nomad-lab>=1.4.1",
     "pydantic",
     "temporalio",
@@ -40,7 +39,7 @@ dev = [
     "pytest",
     "structlog",
     "mkdocs",
-    "mkdocs-material==8.1.1",
+    "mkdocs-material>=8.1.1",
     "pymdown-extensions",
     "mkdocs-click",
     "pytest-asyncio",
