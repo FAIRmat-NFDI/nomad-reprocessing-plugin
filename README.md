@@ -1,8 +1,73 @@
 # nomad-reprocessing-plugin
 
-Nomad example template
+A NOMAD plugin for reprocessing uploaded entries with updated parsers and normalizers.
 
 This `nomad` plugin was generated with `Cookiecutter` along with `@nomad`'s [`cookiecutter-nomad-plugin`](https://github.com/FAIRmat-NFDI/cookiecutter-nomad-plugin) template.
+
+## Usage
+
+The reprocessing action allows you to re-run parsers and normalizers on previously uploaded entries without re-uploading the raw data files. This is useful when:
+
+- You fix bugs in a parser
+- You add new normalization logic
+- You update schema mappings
+- You want to apply new metadata extraction to existing data
+
+### Input Formats
+
+The action accepts multiple upload IDs in two formats:
+
+**1. Python List (JSON Array)** - Recommended for API/programmatic use:
+```json
+{
+  "upload_id": "cD35rtcxTkGGS61Xo9KHxg",
+  "upload_ids": [
+    "abc123abc123abc123",
+    "def456def456def456",
+    "ghi789ghi789ghi789"
+  ]
+}
+```
+
+**2. Comma-Separated String** - Convenient for CLI/scripts:
+```json
+{
+  "upload_id": "cD35rtcxTkGGS61Xo9KHxg",
+  "upload_ids": "abc123abc123abc123, def456def456def456, ghi789ghi789ghi789"
+}
+```
+
+Both formats are automatically handled by the plugin's input validation.
+
+### Triggering via API
+
+```bash
+POST /api/v1/actions/reprocess_uploads/start
+Content-Type: application/json
+
+{
+  "data": {
+    "upload_id": "cD35rtcxTkGGS61Xo9KHxg",
+    "upload_ids": ["upload_id_1", "upload_id_2", "upload_id_3"]
+  }
+}
+```
+
+### Triggering via GUI
+
+Access the reprocessing action from the upload page action menu (if GUI integration is available).
+
+### Architecture
+
+The reprocessing action uses Temporal workflows to:
+1. Spawns upload processing tasks sequentially on the CPU task queue
+2. Poll each upload until processing completes
+3. Generate a summary report with processing results
+
+**Requirements:**
+- NOMAD backend with Temporal workflow support (v1.4.1+)
+- CPU worker running (`nomad admin run action-cpu-worker`)
+- Docker services (Temporal, MongoDB, Elasticsearch)
 
 ## Development
 
