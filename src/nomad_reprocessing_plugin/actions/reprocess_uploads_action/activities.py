@@ -118,6 +118,37 @@ def _count_logs_by_level(logs: list) -> dict[str, int]:
     return counts
 
 
+def _extract_high_priority_logs(logs: list, entry_id: str) -> list[dict]:
+    """Extract high-priority logs (ERROR, WARNING, CRITICAL, DEBUG) with their indices.
+
+    Args:
+        logs: List of processing log dictionaries
+        entry_id: Entry ID to include in each log entry
+
+    Returns:
+        List of high-priority logs sorted by severity (CRITICAL > ERROR > WARNING > DEBUG)
+    """
+    high_priority_levels = {'ERROR', 'WARNING', 'CRITICAL', 'DEBUG'}
+    level_priority = {'CRITICAL': 0, 'ERROR': 1, 'WARNING': 2, 'DEBUG': 3}
+    high_priority_logs = []
+
+    for idx, log in enumerate(logs):
+        if isinstance(log, dict):
+            level = log.get('level', 'INFO')
+            if level in high_priority_levels:
+                high_priority_logs.append({
+                    'level': level,
+                    'event': log.get('event', ''),
+                    'entry_id': entry_id,
+                    'index': idx,
+                    'timestamp': log.get('timestamp', ''),
+                })
+
+    # Sort by severity (CRITICAL first, then ERROR, then WARNING, then DEBUG)
+    high_priority_logs.sort(key=lambda x: level_priority.get(x['level'], 999))
+    return high_priority_logs
+
+
 def _build_entry_summary(upload: Upload, entry) -> dict:
     """Read processing logs from archive and build entry summary with metadata.
 
@@ -146,6 +177,7 @@ def _build_entry_summary(upload: Upload, entry) -> dict:
         processing_errors = []
 
     log_stats = _count_logs_by_level(logs)
+    high_priority_logs = _extract_high_priority_logs(logs, entry.entry_id)
 
     return {
         'entry_id': entry.entry_id,
@@ -153,6 +185,7 @@ def _build_entry_summary(upload: Upload, entry) -> dict:
         'parser': getattr(entry, 'parser_name', '') or '',
         'status': getattr(entry, 'process_status', 'UNKNOWN'),
         'log_stats': log_stats,
+        'high_priority_logs': high_priority_logs,
         'processing_errors': processing_errors,
         'logs': logs,  # Keep in chronological order
     }
