@@ -8,7 +8,7 @@ def parse_upload_id_list(value: str | list[str]) -> list[str]:
         value: Either a list of upload IDs or a comma-separated string
 
     Returns:
-        List of upload ID strings with whitespace trimmed
+        List of upload ID strings with whitespace trimmed and empty strings filtered
 
     Examples:
         >>> parse_upload_id_list(['id1', 'id2'])
@@ -17,10 +17,24 @@ def parse_upload_id_list(value: str | list[str]) -> list[str]:
         ['id1', 'id2', 'id3']
         >>> parse_upload_id_list('id1,,,id2')
         ['id1', 'id2']
+        >>> parse_upload_id_list(['id1,,,,'])
+        ['id1']
     """
     if isinstance(value, str):
+        # Split comma-separated string and filter empty items
         return [upload_id.strip() for upload_id in value.split(',') if upload_id.strip()]
-    return value
+
+    # Handle list case - each item might also contain commas
+    result = []
+    for item in value:
+        if isinstance(item, str):
+            # Split each string item by comma in case it contains multiple IDs
+            result.extend([upload_id.strip() for upload_id in item.split(',') if upload_id.strip()])
+        else:
+            # Non-string items - just include them as-is (should not happen, but be safe)
+            result.append(item)
+
+    return result
 
 
 class ReprocessUploadsWorkflowInput(BaseModel):

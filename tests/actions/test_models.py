@@ -83,6 +83,46 @@ class TestReprocessUploadsWorkflowInput:
         ]
         assert input_data.upload_ids == expected
 
+    def test_upload_ids_list_with_trailing_commas(self):
+        """Test list containing strings with trailing commas (bug fix)."""
+        input_data = ReprocessUploadsWorkflowInput(
+            upload_id='context-upload-id',
+            user_id='test-user-id',
+            upload_ids=['VP4vZt43TaOV2yxYA0DEGQ,,,,'],
+        )
+
+        assert input_data.upload_ids == ['VP4vZt43TaOV2yxYA0DEGQ']
+
+    def test_upload_ids_list_with_embedded_commas(self):
+        """Test list where items contain multiple comma-separated IDs."""
+        input_data = ReprocessUploadsWorkflowInput(
+            upload_id='context-upload-id',
+            user_id='test-user-id',
+            upload_ids=['id1,id2', 'id3,id4,id5'],
+        )
+
+        assert input_data.upload_ids == ['id1', 'id2', 'id3', 'id4', 'id5']
+
+    def test_upload_ids_list_with_preceding_commas(self):
+        """Test list with items containing preceding commas."""
+        input_data = ReprocessUploadsWorkflowInput(
+            upload_id='context-upload-id',
+            user_id='test-user-id',
+            upload_ids=[',,,,VP4vZt43TaOV2yxYA0DEGQ'],
+        )
+
+        assert input_data.upload_ids == ['VP4vZt43TaOV2yxYA0DEGQ']
+
+    def test_upload_ids_string_with_preceding_and_trailing_commas(self):
+        """Test string with both preceding and trailing commas."""
+        input_data = ReprocessUploadsWorkflowInput(
+            upload_id='context-upload-id',
+            user_id='test-user-id',
+            upload_ids=',,id1,,,id2,,',
+        )
+
+        assert input_data.upload_ids == ['id1', 'id2']
+
 
 class TestBuildReprocessSummaryInput:
     """Test input validation for BuildReprocessSummaryInput model."""
