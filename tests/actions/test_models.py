@@ -123,6 +123,26 @@ class TestReprocessUploadsWorkflowInput:
 
         assert input_data.upload_ids == ['id1', 'id2']
 
+    def test_upload_ids_list_with_empty_strings(self):
+        """Test list with empty strings (e.g., from GUI errors)."""
+        input_data = ReprocessUploadsWorkflowInput(
+            upload_id='context-upload-id',
+            user_id='test-user-id',
+            upload_ids=['id1', '', 'id2', '   ', 'id3'],
+        )
+
+        assert input_data.upload_ids == ['id1', 'id2', 'id3']
+
+    def test_upload_ids_list_with_only_empty_strings(self):
+        """Test list containing only empty/whitespace strings."""
+        input_data = ReprocessUploadsWorkflowInput(
+            upload_id='context-upload-id',
+            user_id='test-user-id',
+            upload_ids=['', '  ', '   '],
+        )
+
+        assert input_data.upload_ids == []
+
 
 class TestBuildReprocessSummaryInput:
     """Test input validation for BuildReprocessSummaryInput model."""

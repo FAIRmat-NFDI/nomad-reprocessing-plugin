@@ -24,10 +24,13 @@ def parse_upload_id_list(value: str | list[str]) -> list[str]:
         # Split comma-separated string and filter empty items
         return [upload_id.strip() for upload_id in value.split(',') if upload_id.strip()]
 
-    # Handle list case - each item might also contain commas
+    # Handle list case - filter empty items and split by comma
     result = []
     for item in value:
         if isinstance(item, str):
+            # Skip empty or whitespace-only items (e.g., from GUI errors)
+            if not item.strip():
+                continue
             # Split each string item by comma in case it contains multiple IDs
             result.extend([upload_id.strip() for upload_id in item.split(',') if upload_id.strip()])
         else:
