@@ -69,6 +69,49 @@ The reprocessing action uses Temporal workflows to:
 - CPU worker running (`nomad admin run action-cpu-worker`)
 - Docker services (Temporal, MongoDB, Elasticsearch)
 
+## Inspecting logs in Kibana
+
+The reprocessing summary is written per upload as `reprocessing_summary_<workflow_id>.json` in the context upload's files. For runs that stay below `summary_entry_threshold` total entries it contains the full per-entry logs; above that threshold the per-entry logs would make the file unmanageable, so the summary keeps only aggregate statistics and a Kibana pointer, and the individual logs are inspected in Kibana instead. This repository ships the pieces to make that log view available.
+
+NOMAD forwards its structured logs to Elasticsearch through Logstash. Enable this in the deployment's `nomad.yaml` and restart the workers so they pick up the handler:
+
+```yaml
+logstash:
+  enabled: true
+  host: localhost
+  tcp_port: '5000'
+  level: INFO
+```
+
+Run a Logstash and a Kibana that match your Elasticsearch version, joined to the same Docker network as the Elasticsearch service. The provided pipeline (`ops/logstash.conf`) receives NOMAD's log stream on TCP port 5000 and writes it to a daily `nomad-logs-*` index; override the Elasticsearch target with `ES_HOSTS` if it is not reachable as `elastic:9200`.
+
+```sh
+docker run -d --name nomad_logstash --network <nomad-network> -p 5000:5000 \
+  -e XPACK_MONITORING_ENABLED=false \
+  -v "$PWD/ops/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro" \
+  docker.elastic.co/logstash/logstash:7.17.27
+
+docker run -d --name nomad_kibana --network <nomad-network> -p 5601:5601 \
+  -e ELASTICSEARCH_HOSTS=http://elastic:9200 \
+  docker.elastic.co/kibana/kibana:7.17.27
+```
+
+Once Kibana is up, import the bundled dashboard and index pattern:
+
+```sh
+KIBANA_URL=http://localhost:5601 ./scripts/setup_kibana.sh
+```
+
+This creates the `nomad-logs-*` index pattern and the `NOMAD Reprocessing Errors` dashboard, then opens at `http://localhost:5601/app/dashboards#/view/nomad-reprocessing-errors`. The dashboard breaks failures down by signature, parser, processing step, upload and entry, groups distinct crashes by `exception_hash`, and includes a failures table with the diagnostic columns `level`, `event`, `digest`, `nomad.processing.step`, `nomad.processing.parser`, `nomad.entry_id` and `nomad.upload_id`. Scope any view to a single run with a `nomad.upload_id:"<id>"` query; the `digest` field gives the one-line cause of each failure and the `exception` field the full traceback. The `nomad.entry_id` and `nomad.upload_id` columns are rendered as links (via a URL field formatter on the index pattern) that open Discover filtered to that entry or upload, so you can jump between an individual entry's logs quickly.
+
+To make the entry column open the entry in a NOMAD v2 GUI instead, pass `NOMAD_GUI_URL` (the GUI base URL, which cannot be derived from the logs) when running the setup script; the entry link then becomes `<NOMAD_GUI_URL>/apps/<app>/<entry_id>`, with the app path taken from `NOMAD_APP_PATH` (default `entries`):
+
+```sh
+NOMAD_GUI_URL=http://localhost:3001 ./scripts/setup_kibana.sh
+```
+
+`ENTRY_URL_TEMPLATE` and `UPLOAD_URL_TEMPLATE` (each using `{{value}}` for the id) give full control over both link targets for other deployments or GUI versions.
+
 ## Development
 
 If you want to develop locally this plugin, clone the project and in the plugin folder, create a virtual environment (you can use Python 3.10, 3.11 or 3.12):
