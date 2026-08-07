@@ -18,20 +18,124 @@ from nomad_reprocessing_plugin.actions.reprocess_uploads_action.workflows import
     ReprocessUploadsWorkflow,
 )
 
+ACTIVITIES_MODULE = (
+    'nomad_reprocessing_plugin.actions.reprocess_uploads_action.activities'
+)
+
+
+class FakeEntry:
+    def __init__(
+        self,
+        entry_id: str,
+        mainfile: str = '',
+        parser_name: str = '',
+        process_status: str = 'UNKNOWN',
+    ):
+        self.entry_id = entry_id
+        self.mainfile = mainfile
+        self.parser_name = parser_name
+        self.process_status = process_status
+
+
+class _StagingFiles:
+    def __init__(self, sink: dict[str, str]):
+        self._sink = sink
+
+    def raw_file(self, path: str, _mode: str):
+        sink = self._sink
+
+        class _Ctx:
+            def __enter__(self):
+                self._buf = io.StringIO()
+                return self._buf
+
+            def __exit__(self, exc_type, _exc, _tb):
+                if exc_type is None:
+                    sink[path] = self._buf.getvalue()
+                return False
+
+        return _Ctx()
+
+
+class _UploadFiles:
+    def __init__(self, archive_logs: dict[str, list]):
+        self._archive_logs = archive_logs
+
+    def read_archive(self, entry_id: str):
+        logs = self._archive_logs.get(entry_id, [])
+
+        class _Ctx:
+            def __enter__(self):
+                return {entry_id: {'processing_logs': logs}}
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return False
+
+        return _Ctx()
+
+
+class FakeUpload:
+    """Fake upload with ``n_entries`` entries, each carrying one INFO and one WARNING
+    processing log."""
+
+    def __init__(
+        self,
+        upload_id: str,
+        n_entries: int = 1,
+        process_status: str = 'SUCCESS',
+        failed_entries_count: int = 0,
+    ):
+        self.upload_id = upload_id
+        self.process_status = process_status
+        self.total_entries_count = n_entries
+        self.processed_entries_count = n_entries
+        self.failed_entries_count = failed_entries_count
+        self.written_files: dict[str, str] = {}
+        self.staging_upload_files = _StagingFiles(self.written_files)
+
+        self._entries = [
+            FakeEntry(
+                f'{upload_id}-e{i + 1}',
+                mainfile=f'file_{i + 1}.out',
+                parser_name='fake_parser',
+                process_status='SUCCESS',
+            )
+            for i in range(n_entries)
+        ]
+        archive_logs = {
+            entry.entry_id: [
+                {'level': 'INFO', 'event': 'start', 'timestamp': 't0'},
+                {'level': 'WARNING', 'event': 'watch out', 'timestamp': 't1'},
+            ]
+            for entry in self._entries
+        }
+        self.upload_files = _UploadFiles(archive_logs)
+
+    def entries_sublist(self, start: int, end: int):
+        return self._entries[start:end]
+
+    def process_upload(self):
+        return object()
+
+
+def _fake_upload_api(uploads: dict[str, FakeUpload]):
+    class FakeUploadAPI:
+        @staticmethod
+        def get(upload_id: str) -> FakeUpload:
+            return uploads.setdefault(upload_id, FakeUpload(upload_id))
+
+    return FakeUploadAPI
+
+
+def _patch_summary_config(monkeypatch, threshold: int, kibana_base_url: str = ''):
+    monkeypatch.setattr(
+        f'{ACTIVITIES_MODULE}._get_summary_config',
+        lambda: (threshold, kibana_base_url),
+    )
+
 
 @pytest.mark.asyncio
 async def test_reprocess_upload_activity_polls_until_processed(monkeypatch):
-    class FakeUpload:
-        def __init__(self, upload_id: str, process_status: str, idx: int):
-            self.upload_id = upload_id
-            self.process_status = process_status
-            self.processed_entries_count = idx
-            self.total_entries_count = 3
-            self.failed_entries_count = 1
-
-        def process_upload(self):
-            return object()
-
     states = ['RUNNING', 'RUNNING', 'SUCCESS']
     state_index = {'value': 0}
 
@@ -39,23 +143,17 @@ async def test_reprocess_upload_activity_polls_until_processed(monkeypatch):
         @staticmethod
         def get(upload_id: str):
             index = min(state_index['value'], len(states) - 1)
-            state = states[index]
+            upload = FakeUpload(upload_id, process_status=states[index])
             state_index['value'] += 1
-            return FakeUpload(upload_id, state, state_index['value'])
+            return upload
 
     sleep_calls: list[int] = []
 
     async def fake_sleep(seconds: int):
         sleep_calls.append(seconds)
 
-    monkeypatch.setattr(
-        'nomad_reprocessing_plugin.actions.reprocess_uploads_action.activities.Upload',
-        FakeUploadAPI,
-    )
-    monkeypatch.setattr(
-        'nomad_reprocessing_plugin.actions.reprocess_uploads_action.activities.asyncio.sleep',
-        fake_sleep,
-    )
+    monkeypatch.setattr(f'{ACTIVITIES_MODULE}.Upload', FakeUploadAPI)
+    monkeypatch.setattr(f'{ACTIVITIES_MODULE}.asyncio.sleep', fake_sleep)
 
     result = await reprocess_upload(ReprocessSingleUploadInput(upload_id='u1'))
 
@@ -64,90 +162,15 @@ async def test_reprocess_upload_activity_polls_until_processed(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_build_reprocess_summary_activity(monkeypatch):
-    class FakeEntry:
-        def __init__(self, entry_id: str):
-            self.entry_id = entry_id
-
-    class FakeUpload:
-        def __init__(self, upload_id: str):
-            self.upload_id = upload_id
-            self.process_status = 'SUCCESS'
-            self.total_entries_count = 2
-            self.processed_entries_count = 2
-            self.failed_entries_count = 0
-            self._written_files: dict[str, str] = {}
-
-            class _StagingFiles:
-                def __init__(self, outer):
-                    self._outer = outer
-
-                def raw_file(self, path: str, _mode: str):
-                    outer = self._outer
-
-                    class _Ctx:
-                        def __enter__(self):
-                            self._buf = io.StringIO()
-                            return self._buf
-
-                        def __exit__(self, exc_type, exc, _tb):
-                            if exc_type is None:
-                                outer._written_files[path] = self._buf.getvalue()
-                            return False
-
-                    return _Ctx()
-
-            self.staging_upload_files = _StagingFiles(self)
-            self._archive_logs = {
-                f'{self.upload_id}-e1': [f'{self.upload_id}-entry-log'],
-            }
-
-            class _UploadFiles:
-                def __init__(self, outer):
-                    self._outer = outer
-
-                def read_archive(self, entry_id: str):
-                    outer = self._outer
-
-                    class _Ctx:
-                        def __enter__(self):
-                            return {
-                                entry_id: {
-                                    'processing_logs': outer._archive_logs.get(
-                                        entry_id, []
-                                    )
-                                }
-                            }
-
-                        def __exit__(self, _exc_type, _exc, _tb):
-                            return False
-
-                    return _Ctx()
-
-            self.upload_files = _UploadFiles(self)
-
-        def entries_sublist(self, _start: int, _end: int):
-            return [FakeEntry(f'{self.upload_id}-e1')]
-
+async def test_build_reprocess_summary_full_mode(monkeypatch):
+    """Below the threshold the summary holds full per-entry metadata and logs."""
     uploads: dict[str, FakeUpload] = {}
-
-    class FakeUploadAPI:
-        @staticmethod
-        def get(upload_id: str):
-            if upload_id not in uploads:
-                uploads[upload_id] = FakeUpload(upload_id)
-            return uploads[upload_id]
-
-    monkeypatch.setattr(
-        'nomad_reprocessing_plugin.actions.reprocess_uploads_action.activities.Upload',
-        FakeUploadAPI,
-    )
+    monkeypatch.setattr(f'{ACTIVITIES_MODULE}.Upload', _fake_upload_api(uploads))
+    _patch_summary_config(monkeypatch, threshold=200)
 
     result = await build_reprocess_summary(
         BuildReprocessSummaryInput(
-            upload_id='summary-upload',
-            workflow_id='wf-123',
-            upload_ids=['u1', 'u2'],
+            upload_id='summary-upload', workflow_id='wf-123', upload_ids=['u1']
         )
     )
 
@@ -156,28 +179,25 @@ async def test_build_reprocess_summary_activity(monkeypatch):
             {
                 'upload_id': 'u1',
                 'status': 'SUCCESS',
-                'entry_status': '2 success, 0 failures',
-            },
-            {
-                'upload_id': 'u2',
-                'status': 'SUCCESS',
-                'entry_status': '2 success, 0 failures',
-            },
+                'entry_status': '1 success, 0 failures',
+            }
         ]
     }
-    summary_filename = 'reprocessing_summary_wf-123.json'
-    assert summary_filename in uploads['summary-upload']._written_files
-    assert json.loads(
-        uploads['summary-upload']._written_files[summary_filename]
-    ) == {
+    written = uploads['summary-upload'].written_files[
+        'reprocessing_summary_wf-123.json'
+    ]
+    payload = json.loads(written)
+    assert payload['mode'] == 'full'
+    assert payload['total_entries'] == 1
+    assert payload['uploads'] == {
         'u1': {
             'status': 'SUCCESS',
             'stats': {
-                'total_entries': 2,
-                'successful': 2,
+                'total_entries': 1,
+                'successful': 1,
                 'failed': 0,
                 'total_errors': 0,
-                'total_warnings': 0,
+                'total_warnings': 1,
                 'total_info': 1,
                 'total_debug': 0,
                 'total_critical': 0,
@@ -185,116 +205,152 @@ async def test_build_reprocess_summary_activity(monkeypatch):
             'entries': [
                 {
                     'entry_id': 'u1-e1',
-                    'mainfile': '',
-                    'parser': '',
-                    'status': 'UNKNOWN',
+                    'mainfile': 'file_1.out',
+                    'parser': 'fake_parser',
+                    'status': 'SUCCESS',
                     'log_stats': {
                         'ERROR': 0,
-                        'WARNING': 0,
+                        'WARNING': 1,
                         'INFO': 1,
                         'DEBUG': 0,
                         'CRITICAL': 0,
                     },
-                    'high_priority_logs': [],
+                    'high_priority_logs': [
+                        {
+                            'level': 'WARNING',
+                            'event': 'watch out',
+                            'entry_id': 'u1-e1',
+                            'index': 1,
+                            'timestamp': 't1',
+                        }
+                    ],
                     'processing_errors': [],
-                    'logs': ['u1-entry-log'],
-                },
+                    'logs': [
+                        {'level': 'INFO', 'event': 'start', 'timestamp': 't0'},
+                        {'level': 'WARNING', 'event': 'watch out', 'timestamp': 't1'},
+                    ],
+                }
             ],
-        },
-        'u2': {
-            'status': 'SUCCESS',
-            'stats': {
-                'total_entries': 2,
-                'successful': 2,
-                'failed': 0,
-                'total_errors': 0,
-                'total_warnings': 0,
-                'total_info': 1,
-                'total_debug': 0,
-                'total_critical': 0,
-            },
-            'entries': [
-                {
-                    'entry_id': 'u2-e1',
-                    'mainfile': '',
-                    'parser': '',
-                    'status': 'UNKNOWN',
-                    'log_stats': {
-                        'ERROR': 0,
-                        'WARNING': 0,
-                        'INFO': 1,
-                        'DEBUG': 0,
-                        'CRITICAL': 0,
-                    },
-                    'high_priority_logs': [],
-                    'processing_errors': [],
-                    'logs': ['u2-entry-log'],
-                },
-            ],
-        },
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_build_reprocess_summary_kibana_mode(monkeypatch):
+    """Above the threshold the summary drops per-entry logs and points to Kibana."""
+    n_entries = 5
+    uploads: dict[str, FakeUpload] = {'big': FakeUpload('big', n_entries=n_entries)}
+    monkeypatch.setattr(f'{ACTIVITIES_MODULE}.Upload', _fake_upload_api(uploads))
+    _patch_summary_config(
+        monkeypatch, threshold=3, kibana_base_url='http://localhost:5601/'
+    )
+
+    await build_reprocess_summary(
+        BuildReprocessSummaryInput(
+            upload_id='summary-upload', workflow_id='wf-xl', upload_ids=['big']
+        )
+    )
+
+    written = uploads['summary-upload'].written_files['reprocessing_summary_wf-xl.json']
+    payload = json.loads(written)
+    assert payload['mode'] == 'kibana'
+    assert payload['total_entries'] == n_entries
+
+    big = payload['uploads']['big']
+    assert 'entries' not in big  # per-entry logs are deferred to Kibana
+    assert big['stats'] == {
+        'total_entries': n_entries,
+        'successful': n_entries,
+        'failed': 0,
+        'total_errors': 0,
+        'total_warnings': n_entries,
+        'total_info': n_entries,
+        'total_debug': 0,
+        'total_critical': 0,
+    }
+    assert big['kibana']['index'] == 'nomad-logs-*'
+    assert big['kibana']['query'] == 'nomad.upload_id:"big"'
+    assert big['kibana']['workflow_id'] == 'wf-xl'
+    assert big['kibana']['url'].startswith('http://localhost:5601/app/discover#/?_a=')
+
+
+@pytest.mark.parametrize(
+    'threshold, expected_mode',
+    [
+        pytest.param(200, 'full', id='below-threshold-full'),
+        pytest.param(4, 'full', id='at-threshold-full'),
+        pytest.param(3, 'kibana', id='above-threshold-kibana'),
+        pytest.param(0, 'kibana', id='zero-threshold-kibana'),
+    ],
+)
+@pytest.mark.asyncio
+async def test_build_reprocess_summary_mode_threshold(
+    monkeypatch, threshold, expected_mode
+):
+    """Two uploads with two entries each (4 total) switch mode around the threshold."""
+    uploads: dict[str, FakeUpload] = {
+        'u1': FakeUpload('u1', n_entries=2),
+        'u2': FakeUpload('u2', n_entries=2),
+    }
+    monkeypatch.setattr(f'{ACTIVITIES_MODULE}.Upload', _fake_upload_api(uploads))
+    _patch_summary_config(monkeypatch, threshold=threshold)
+    expected_total = sum(upload.total_entries_count for upload in uploads.values())
+
+    await build_reprocess_summary(
+        BuildReprocessSummaryInput(
+            upload_id='summary-upload', workflow_id='wf', upload_ids=['u1', 'u2']
+        )
+    )
+
+    payload = json.loads(
+        uploads['summary-upload'].written_files['reprocessing_summary_wf.json']
+    )
+    assert payload['mode'] == expected_mode
+    assert payload['total_entries'] == expected_total
+    has_entries = 'entries' in payload['uploads']['u1']
+    assert has_entries is (expected_mode == 'full')
+
+
+@pytest.mark.asyncio
+async def test_build_reprocess_summary_missing_archive(monkeypatch):
+    """An unreadable archive yields zeroed log stats rather than raising."""
+
+    class BrokenUpload(FakeUpload):
+        def __init__(self, upload_id: str):
+            super().__init__(upload_id, n_entries=1)
+
+            class _Broken:
+                def read_archive(self, entry_id: str):
+                    raise KeyError(entry_id)
+
+            self.upload_files = _Broken()
+
+    uploads = {'u1': BrokenUpload('u1')}
+    monkeypatch.setattr(f'{ACTIVITIES_MODULE}.Upload', _fake_upload_api(uploads))
+    _patch_summary_config(monkeypatch, threshold=200)
+
+    await build_reprocess_summary(
+        BuildReprocessSummaryInput(
+            upload_id='summary-upload', workflow_id='wf', upload_ids=['u1']
+        )
+    )
+
+    payload = json.loads(
+        uploads['summary-upload'].written_files['reprocessing_summary_wf.json']
+    )
+    entry = payload['uploads']['u1']['entries'][0]
+    assert entry['logs'] == []
+    assert entry['log_stats'] == {
+        'ERROR': 0,
+        'WARNING': 0,
+        'INFO': 0,
+        'DEBUG': 0,
+        'CRITICAL': 0,
     }
 
 
 @pytest.mark.asyncio
 async def test_reprocess_uploads_workflow(monkeypatch):
-    class FakeEntry:
-        def __init__(self, entry_id: str):
-            self.entry_id = entry_id
-
-    class FakeUpload:
-        def __init__(self, upload_id: str, process_status: str, idx: int):
-            self.upload_id = upload_id
-            self.process_status = process_status
-            self.processed_entries_count = idx
-            self.total_entries_count = 2
-            self.failed_entries_count = 0
-
-            class _StagingFiles:
-                def raw_file(self, _path: str, _mode: str):
-                    class _Ctx:
-                        def __enter__(self):
-                            return io.StringIO()
-
-                        def __exit__(self, _exc_type, _exc, _tb):
-                            return False
-
-                    return _Ctx()
-
-            self.staging_upload_files = _StagingFiles()
-            self._archive_logs = {
-                f'{self.upload_id}-e1': [f'{self.upload_id}-entry-log'],
-            }
-
-            class _UploadFiles:
-                def __init__(self, outer):
-                    self._outer = outer
-
-                def read_archive(self, entry_id: str):
-                    outer = self._outer
-
-                    class _Ctx:
-                        def __enter__(self):
-                            return {
-                                entry_id: {
-                                    'processing_logs': outer._archive_logs.get(
-                                        entry_id, []
-                                    )
-                                }
-                            }
-
-                        def __exit__(self, _exc_type, _exc, _tb):
-                            return False
-
-                    return _Ctx()
-
-            self.upload_files = _UploadFiles(self)
-
-        def process_upload(self):
-            return object()
-
-        def entries_sublist(self, _start: int, _end: int):
-            return [FakeEntry(f'{self.upload_id}-e1')]
-
     upload_states = {
         'u1': ['RUNNING', 'SUCCESS'],
         'u2': ['RUNNING', 'RUNNING', 'SUCCESS'],
@@ -305,24 +361,19 @@ async def test_reprocess_uploads_workflow(monkeypatch):
         @staticmethod
         def get(upload_id: str):
             if upload_id not in upload_states:
-                return FakeUpload(upload_id, 'SUCCESS', 2)
+                return FakeUpload(upload_id, n_entries=2)
             states = upload_states[upload_id]
             index = min(upload_indices[upload_id], len(states) - 1)
             state = states[index]
             upload_indices[upload_id] += 1
-            return FakeUpload(upload_id, state, upload_indices[upload_id])
+            return FakeUpload(upload_id, n_entries=2, process_status=state)
 
     async def fake_sleep(_seconds: int):
         return None
 
-    monkeypatch.setattr(
-        'nomad_reprocessing_plugin.actions.reprocess_uploads_action.activities.Upload',
-        FakeUploadAPI,
-    )
-    monkeypatch.setattr(
-        'nomad_reprocessing_plugin.actions.reprocess_uploads_action.activities.asyncio.sleep',
-        fake_sleep,
-    )
+    monkeypatch.setattr(f'{ACTIVITIES_MODULE}.Upload', FakeUploadAPI)
+    monkeypatch.setattr(f'{ACTIVITIES_MODULE}.asyncio.sleep', fake_sleep)
+    _patch_summary_config(monkeypatch, threshold=200)
 
     task_queue = 'test-reprocess-uploads-workflow'
     async with await WorkflowEnvironment.start_local() as env:
@@ -347,12 +398,12 @@ async def test_reprocess_uploads_workflow(monkeypatch):
                     {
                         'upload_id': 'u1',
                         'status': 'SUCCESS',
-                        'entry_status': '3 success, 0 failures',
+                        'entry_status': '2 success, 0 failures',
                     },
                     {
                         'upload_id': 'u2',
                         'status': 'SUCCESS',
-                        'entry_status': '4 success, 0 failures',
+                        'entry_status': '2 success, 0 failures',
                     },
                 ]
             }
