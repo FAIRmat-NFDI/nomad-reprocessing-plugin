@@ -83,34 +83,44 @@ logstash:
   level: INFO
 ```
 
-Run a Logstash and a Kibana that match your Elasticsearch version, joined to the same Docker network as the Elasticsearch service. The provided pipeline (`ops/logstash.conf`) receives NOMAD's log stream on TCP port 5000 and writes it to a daily `nomad-logs-*` index; override the Elasticsearch target with `ES_HOSTS` if it is not reachable as `elastic:9200`.
+Run a Logstash and a Kibana that match your Elasticsearch version on the same Docker network as the Elasticsearch service. Add them to your distro-dev `docker-compose.yaml`; the `logstash` service mounts the provided pipeline (`ops/logstash.conf`), which receives NOMAD's log stream on TCP port 5000 and writes it to a daily `nomad-logs-*` index:
 
-```sh
-docker run -d --name nomad_logstash --network <nomad-network> -p 5000:5000 \
-  -e XPACK_MONITORING_ENABLED=false \
-  -v "$PWD/ops/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro" \
-  docker.elastic.co/logstash/logstash:7.17.27
+```yaml
+  logstash:
+    image: docker.elastic.co/logstash/logstash:7.17.27
+    container_name: nomad_logstash
+    depends_on:
+      - elastic
+    environment:
+      - XPACK_MONITORING_ENABLED=false
+    ports:
+      - '5000:5000'
+    volumes:
+      - ./nomad-reprocessing-plugin/ops/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
 
-docker run -d --name nomad_kibana --network <nomad-network> -p 5601:5601 \
-  -e ELASTICSEARCH_HOSTS=http://elastic:9200 \
-  docker.elastic.co/kibana/kibana:7.17.27
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.17.27
+    container_name: nomad_kibana
+    depends_on:
+      - elastic
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elastic:9200
+    ports:
+      - '5601:5601'
 ```
 
-Once Kibana is up, import the bundled dashboard and index pattern:
+Adjust `elastic` to your Elasticsearch service name and the `ops/logstash.conf` path to wherever the plugin is checked out (override the Elasticsearch target with an `ES_HOSTS` environment variable on the `logstash` service if it is not reachable as `elastic:9200`). Then enable log shipping in `nomad.yaml` (above), bring the containers up (`docker-compose up -d logstash kibana`) and restart the workers.
+
+Once Kibana is up, import the dashboard bundle `ops/kibana/nomad_dashboard.ndjson` once — from the UI (Stack Management → Saved Objects → Import) or with a single request:
 
 ```sh
-KIBANA_URL=http://localhost:5601 ./scripts/setup_kibana.sh
+curl -X POST 'http://localhost:5601/api/saved_objects/_import?overwrite=true' \
+  -H 'kbn-xsrf: true' --form file=@ops/kibana/nomad_dashboard.ndjson
 ```
 
-This creates the `nomad-logs-*` index pattern and the `NOMAD Reprocessing Errors` dashboard, then opens at `http://localhost:5601/app/dashboards#/view/nomad-reprocessing-errors`. The dashboard breaks failures down by signature, parser, processing step, upload and entry, groups distinct crashes by `exception_hash`, and includes a failures table with the diagnostic columns `level`, `event`, `digest`, `nomad.processing.step`, `nomad.processing.parser`, `nomad.entry_id` and `nomad.upload_id`. Scope any view to a single run with a `nomad.upload_id:"<id>"` query; the `digest` field gives the one-line cause of each failure and the `exception` field the full traceback. The `nomad.entry_id` and `nomad.upload_id` columns are rendered as links (via a URL field formatter on the index pattern) that open Discover filtered to that entry or upload, so you can jump between an individual entry's logs quickly.
+This creates the `nomad-logs-*` index pattern and the `NOMAD Reprocessing Errors` dashboard at `http://localhost:5601/app/dashboards#/view/nomad-reprocessing-errors` (optionally set `nomad-logs-*` as the default index pattern in Kibana's advanced settings). The dashboard breaks failures down by signature, parser, processing step, upload and entry, groups distinct crashes by `exception_hash`, and includes a failures table with the diagnostic columns `level`, `event`, `digest`, `nomad.processing.step`, `nomad.processing.parser`, `nomad.entry_id` and `nomad.upload_id`. Scope any view to a single run with a `nomad.upload_id:"<id>"` query; the `digest` field gives the one-line cause of each failure and the `exception` field the full traceback. The `nomad.entry_id` and `nomad.upload_id` columns are rendered as links (via a URL field formatter on the index pattern) that open Discover filtered to that entry or upload, so you can jump between an individual entry's logs quickly.
 
-To make the entry column open the entry in a NOMAD v2 GUI instead, pass `NOMAD_GUI_URL` (the GUI base URL, which cannot be derived from the logs) when running the setup script; the entry link then becomes `<NOMAD_GUI_URL>/apps/<app>/<entry_id>`, with the app path taken from `NOMAD_APP_PATH` (default `entries`):
-
-```sh
-NOMAD_GUI_URL=http://localhost:3001 ./scripts/setup_kibana.sh
-```
-
-`ENTRY_URL_TEMPLATE` and `UPLOAD_URL_TEMPLATE` (each using `{{value}}` for the id) give full control over both link targets for other deployments or GUI versions.
+To make the entry column open the entry in a NOMAD v2 GUI instead, edit the URL field format on the index pattern (Stack Management → Data Views → `nomad-logs-*` → `nomad.entry_id` → Format: Url) with a template such as `<gui-base>/apps/<app>/{{value}}`, for example `http://localhost:3001/apps/entries/{{value}}`.
 
 ## Development
 
