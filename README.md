@@ -15,12 +15,12 @@ The reprocessing action allows you to re-run parsers and normalizers on previous
 
 ### Input Formats
 
-The uploads to reprocess are given in `upload_ids`, in either of two formats.
+The uploads to reprocess are given in `target_upload_ids`, in either of two formats.
 
 **1. Python List (JSON Array)** - Recommended for API/programmatic use:
 ```json
 {
-  "upload_ids": [
+  "target_upload_ids": [
     "abc123abc123abc123",
     "def456def456def456",
     "ghi789ghi789ghi789"
@@ -31,11 +31,16 @@ The uploads to reprocess are given in `upload_ids`, in either of two formats.
 **2. Comma-Separated String** - Convenient for CLI/scripts:
 ```json
 {
-  "upload_ids": "abc123abc123abc123, def456def456def456, ghi789ghi789ghi789"
+  "target_upload_ids": "abc123abc123abc123, def456def456def456, ghi789ghi789ghi789"
 }
 ```
 
 Both formats are automatically handled by the plugin's input validation.
+
+The optional `upload_id` field is separate: it is the context upload the run is
+associated with (for the per-upload action history), not a reprocess target. The GUI
+auto-fills it when the action is launched from a project, so it normally does not need
+to be set by hand.
 
 ### Triggering via API
 
@@ -45,7 +50,7 @@ Content-Type: application/json
 
 {
   "data": {
-    "upload_ids": ["upload_id_1", "upload_id_2", "upload_id_3"]
+    "target_upload_ids": ["upload_id_1", "upload_id_2", "upload_id_3"]
   }
 }
 ```

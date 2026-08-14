@@ -424,7 +424,7 @@ async def test_reprocess_uploads_workflow(monkeypatch):
                 ReprocessUploadsWorkflow.run,
                 ReprocessUploadsWorkflowInput(
                     user_id='user-id',
-                    upload_ids=['u1', 'u2'],
+                    target_upload_ids=['u1', 'u2'],
                 ),
                 id='test-workflow',
                 task_queue=task_queue,

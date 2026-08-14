@@ -51,18 +51,27 @@ def parse_upload_id_list(value: str | list[str]) -> list[str]:
 class ReprocessUploadsWorkflowInput(BaseModel):
     """Input model for reprocessing multiple uploads."""
 
+    upload_id: str | None = Field(
+        default=None,
+        description=(
+            'Optional context upload the run is associated with. The GUI auto-fills '
+            'it from the project when the action is launched there, so the run '
+            'appears under that upload in the action history. Not a reprocess target '
+            'and not used to store the summary.'
+        ),
+    )
     user_id: str = Field(
         ..., description='Unique identifier for the user who initiated the workflow.'
     )
-    upload_ids: list[str] = Field(
+    target_upload_ids: list[str] = Field(
         ...,
         description='List of upload identifiers to reprocess one by one. Can be provided as a Python list or comma-separated string.',
     )
 
-    @field_validator('upload_ids', mode='before')
+    @field_validator('target_upload_ids', mode='before')
     @classmethod
-    def validate_upload_ids(cls, v):
-        """Parse upload_ids from either list or comma-separated string."""
+    def validate_target_upload_ids(cls, v):
+        """Parse target_upload_ids from either list or comma-separated string."""
         return parse_upload_id_list(v)
 
 
