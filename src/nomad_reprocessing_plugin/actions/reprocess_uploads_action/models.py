@@ -22,7 +22,9 @@ def parse_upload_id_list(value: str | list[str]) -> list[str]:
     """
     if isinstance(value, str):
         # Split comma-separated string and filter empty items
-        return [upload_id.strip() for upload_id in value.split(',') if upload_id.strip()]
+        return [
+            upload_id.strip() for upload_id in value.split(',') if upload_id.strip()
+        ]
 
     # Handle list case - filter empty items and split by comma
     result = []
@@ -32,7 +34,13 @@ def parse_upload_id_list(value: str | list[str]) -> list[str]:
             if not item.strip():
                 continue
             # Split each string item by comma in case it contains multiple IDs
-            result.extend([upload_id.strip() for upload_id in item.split(',') if upload_id.strip()])
+            result.extend(
+                [
+                    upload_id.strip()
+                    for upload_id in item.split(',')
+                    if upload_id.strip()
+                ]
+            )
         else:
             # Non-string items - just include them as-is (should not happen, but be safe)
             result.append(item)
@@ -43,10 +51,6 @@ def parse_upload_id_list(value: str | list[str]) -> list[str]:
 class ReprocessUploadsWorkflowInput(BaseModel):
     """Input model for reprocessing multiple uploads."""
 
-    upload_id: str = Field(
-        ...,
-        description='Unique identifier for the upload associated with the workflow context.',
-    )
     user_id: str = Field(
         ..., description='Unique identifier for the user who initiated the workflow.'
     )
@@ -71,9 +75,12 @@ class ReprocessSingleUploadInput(BaseModel):
 class BuildReprocessSummaryInput(BaseModel):
     """Input model for building the reprocessing summary payload."""
 
-    upload_id: str = Field(
+    user_id: str = Field(
         ...,
-        description='Upload identifier where the generated summary payload is persisted.',
+        description=(
+            'User that owns the dedicated reprocessing upload where the summary '
+            'artifact is persisted.'
+        ),
     )
     workflow_id: str = Field(
         ..., description='Workflow identifier used to name the summary JSON file.'

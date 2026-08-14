@@ -2,8 +2,10 @@ import asyncio
 import json
 from urllib.parse import quote
 
+from nomad import datamodel
 from nomad.archive.storage import ArchiveError
 from nomad.config import config
+from nomad.files import StagingUploadFiles
 from nomad.processing.base import ProcessStatus
 from nomad.processing.data import Entry, Upload
 from nomad.utils.structlogging import get_logger
@@ -24,6 +26,10 @@ ACTION_ENTRY_POINT_ID = (
 
 # Elasticsearch/Kibana index pattern that NOMAD's Logstash log shipping writes to.
 KIBANA_LOG_INDEX = 'nomad-logs-*'
+
+# Name of the dedicated upload that collects reprocessing summaries. One such upload
+# per initiating user holds every run's summary artifact.
+SUMMARY_UPLOAD_NAME = 'Reprocessing summaries'
 
 LOG_LEVELS = ('ERROR', 'WARNING', 'INFO', 'DEBUG', 'CRITICAL')
 
@@ -99,14 +105,70 @@ async def build_reprocess_summary(data: BuildReprocessSummaryInput) -> dict:
                 upload, successful_entries, failed_entries
             )
 
-    summary_upload = Upload.get(data.upload_id)
+    summary_upload = _get_or_create_summary_upload(data.user_id)
     summary_filename = f'reprocessing_summary_{data.workflow_id}.json'
     with summary_upload.staging_upload_files.raw_file(
         summary_filename, 'wt'
     ) as summary_file:
         json.dump(detailed_summary, summary_file, indent=2)
 
-    return {'uploads': compact_results}
+    # Also record the run as a searchable entry: a metadata-only archive file whose
+    # standard EntryMetadata makes the run queryable by which uploads it touched.
+    # `references` holds the reprocessed upload ids; `comment` carries compact stats
+    # and points back to the detailed artifact.
+    total_failures = sum(upload.failed_entries_count for upload in uploads)
+    entry_filename = f'reprocessing_summary_{data.workflow_id}.archive.json'
+    entry_archive = {
+        'metadata': {
+            'entry_name': f'Reprocessing {data.workflow_id}',
+            'references': list(data.upload_ids),
+            'comment': (
+                f'{len(uploads)} upload(s), {total_entries} entries, '
+                f'{total_failures} failures; mode={detailed_summary["mode"]}; '
+                f'details: {summary_filename}'
+            ),
+        }
+    }
+    with summary_upload.staging_upload_files.raw_file(
+        entry_filename, 'wt'
+    ) as entry_file:
+        json.dump(entry_archive, entry_file, indent=2)
+    summary_upload.process_upload(path_filter=entry_filename)
+
+    logger.info(
+        'reprocessing summary written: upload_id: %s, file: %s, entry: %s',
+        summary_upload.upload_id,
+        summary_filename,
+        entry_filename,
+    )
+    return {
+        'summary_upload_id': summary_upload.upload_id,
+        'summary_file': summary_filename,
+        'summary_entry_mainfile': entry_filename,
+        'uploads': compact_results,
+    }
+
+
+def _get_or_create_summary_upload(user_id: str) -> Upload:
+    """Return the dedicated reprocessing upload for a user, creating it if needed.
+
+    A single run can span several uploads, so its summary belongs to a dedicated
+    location rather than one of the reprocessed uploads. Upload files are permanent,
+    whereas the action-instance storage is pruned over time, which is why the summary
+    is persisted as an upload artifact. Summaries are collected in one upload per
+    initiating user, named ``SUMMARY_UPLOAD_NAME``.
+    """
+    summary_upload = Upload.objects(
+        main_author=user_id, upload_name=SUMMARY_UPLOAD_NAME
+    ).first()
+    if summary_upload is None:
+        user = datamodel.User.get(user_id=user_id)
+        summary_upload = Upload.create(
+            main_author=user, upload_name=SUMMARY_UPLOAD_NAME
+        )
+    if not StagingUploadFiles.exists_for(summary_upload.upload_id):
+        StagingUploadFiles(summary_upload.upload_id, create=True)
+    return summary_upload
 
 
 def _get_summary_config() -> tuple[int, str]:

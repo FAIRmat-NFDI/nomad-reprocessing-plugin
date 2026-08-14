@@ -92,6 +92,7 @@ class FakeUpload:
         self.failed_entries_count = failed_entries_count
         self.written_files: dict[str, str] = {}
         self.staging_upload_files = _StagingFiles(self.written_files)
+        self.process_calls: list[dict] = []
 
         self._entries = [
             FakeEntry(
@@ -114,7 +115,8 @@ class FakeUpload:
     def entries_sublist(self, start: int, end: int):
         return self._entries[start:end]
 
-    def process_upload(self):
+    def process_upload(self, **kwargs):
+        self.process_calls.append(kwargs)
         return object()
 
 
@@ -131,6 +133,14 @@ def _patch_summary_config(monkeypatch, threshold: int, kibana_base_url: str = ''
     monkeypatch.setattr(
         f'{ACTIVITIES_MODULE}._get_summary_config',
         lambda: (threshold, kibana_base_url),
+    )
+
+
+def _patch_summary_upload(monkeypatch, upload: 'FakeUpload'):
+    """Route the summary to a dedicated upload, bypassing Mongo/file-store lookup."""
+    monkeypatch.setattr(
+        f'{ACTIVITIES_MODULE}._get_or_create_summary_upload',
+        lambda user_id: upload,
     )
 
 
@@ -166,26 +176,40 @@ async def test_build_reprocess_summary_full_mode(monkeypatch):
     """Below the threshold the summary holds full per-entry metadata and logs."""
     uploads: dict[str, FakeUpload] = {}
     monkeypatch.setattr(f'{ACTIVITIES_MODULE}.Upload', _fake_upload_api(uploads))
+    summary_upload = FakeUpload('reprocessing-upload', n_entries=0)
+    _patch_summary_upload(monkeypatch, summary_upload)
     _patch_summary_config(monkeypatch, threshold=200)
 
     result = await build_reprocess_summary(
         BuildReprocessSummaryInput(
-            upload_id='summary-upload', workflow_id='wf-123', upload_ids=['u1']
+            user_id='user-1', workflow_id='wf-123', upload_ids=['u1']
         )
     )
 
     assert result == {
+        'summary_upload_id': 'reprocessing-upload',
+        'summary_file': 'reprocessing_summary_wf-123.json',
+        'summary_entry_mainfile': 'reprocessing_summary_wf-123.archive.json',
         'uploads': [
             {
                 'upload_id': 'u1',
                 'status': 'SUCCESS',
                 'entry_status': '1 success, 0 failures',
             }
-        ]
+        ],
     }
-    written = uploads['summary-upload'].written_files[
-        'reprocessing_summary_wf-123.json'
+    # searchable summary entry: metadata records which uploads the run touched,
+    # and the archive file is processed so the entry gets indexed.
+    entry_meta = json.loads(
+        summary_upload.written_files['reprocessing_summary_wf-123.archive.json']
+    )['metadata']
+    assert entry_meta['entry_name'] == 'Reprocessing wf-123'
+    assert entry_meta['references'] == ['u1']
+    assert 'reprocessing_summary_wf-123.json' in entry_meta['comment']
+    assert summary_upload.process_calls == [
+        {'path_filter': 'reprocessing_summary_wf-123.archive.json'}
     ]
+    written = summary_upload.written_files['reprocessing_summary_wf-123.json']
     payload = json.loads(written)
     assert payload['mode'] == 'full'
     assert payload['total_entries'] == 1
@@ -241,17 +265,19 @@ async def test_build_reprocess_summary_kibana_mode(monkeypatch):
     n_entries = 5
     uploads: dict[str, FakeUpload] = {'big': FakeUpload('big', n_entries=n_entries)}
     monkeypatch.setattr(f'{ACTIVITIES_MODULE}.Upload', _fake_upload_api(uploads))
+    summary_upload = FakeUpload('reprocessing-upload', n_entries=0)
+    _patch_summary_upload(monkeypatch, summary_upload)
     _patch_summary_config(
         monkeypatch, threshold=3, kibana_base_url='http://localhost:5601/'
     )
 
     await build_reprocess_summary(
         BuildReprocessSummaryInput(
-            upload_id='summary-upload', workflow_id='wf-xl', upload_ids=['big']
+            user_id='user-1', workflow_id='wf-xl', upload_ids=['big']
         )
     )
 
-    written = uploads['summary-upload'].written_files['reprocessing_summary_wf-xl.json']
+    written = summary_upload.written_files['reprocessing_summary_wf-xl.json']
     payload = json.loads(written)
     assert payload['mode'] == 'kibana'
     assert payload['total_entries'] == n_entries
@@ -293,22 +319,32 @@ async def test_build_reprocess_summary_mode_threshold(
         'u2': FakeUpload('u2', n_entries=2),
     }
     monkeypatch.setattr(f'{ACTIVITIES_MODULE}.Upload', _fake_upload_api(uploads))
+    summary_upload = FakeUpload('reprocessing-upload', n_entries=0)
+    _patch_summary_upload(monkeypatch, summary_upload)
     _patch_summary_config(monkeypatch, threshold=threshold)
     expected_total = sum(upload.total_entries_count for upload in uploads.values())
 
     await build_reprocess_summary(
         BuildReprocessSummaryInput(
-            upload_id='summary-upload', workflow_id='wf', upload_ids=['u1', 'u2']
+            user_id='user-1', workflow_id='wf', upload_ids=['u1', 'u2']
         )
     )
 
-    payload = json.loads(
-        uploads['summary-upload'].written_files['reprocessing_summary_wf.json']
-    )
+    payload = json.loads(summary_upload.written_files['reprocessing_summary_wf.json'])
     assert payload['mode'] == expected_mode
     assert payload['total_entries'] == expected_total
     has_entries = 'entries' in payload['uploads']['u1']
     assert has_entries is (expected_mode == 'full')
+
+    # regardless of mode, a searchable entry referencing both uploads is written
+    # and processed
+    entry_meta = json.loads(
+        summary_upload.written_files['reprocessing_summary_wf.archive.json']
+    )['metadata']
+    assert entry_meta['references'] == ['u1', 'u2']
+    assert summary_upload.process_calls == [
+        {'path_filter': 'reprocessing_summary_wf.archive.json'}
+    ]
 
 
 @pytest.mark.asyncio
@@ -327,17 +363,17 @@ async def test_build_reprocess_summary_missing_archive(monkeypatch):
 
     uploads = {'u1': BrokenUpload('u1')}
     monkeypatch.setattr(f'{ACTIVITIES_MODULE}.Upload', _fake_upload_api(uploads))
+    summary_upload = FakeUpload('reprocessing-upload', n_entries=0)
+    _patch_summary_upload(monkeypatch, summary_upload)
     _patch_summary_config(monkeypatch, threshold=200)
 
     await build_reprocess_summary(
         BuildReprocessSummaryInput(
-            upload_id='summary-upload', workflow_id='wf', upload_ids=['u1']
+            user_id='user-1', workflow_id='wf', upload_ids=['u1']
         )
     )
 
-    payload = json.loads(
-        uploads['summary-upload'].written_files['reprocessing_summary_wf.json']
-    )
+    payload = json.loads(summary_upload.written_files['reprocessing_summary_wf.json'])
     entry = payload['uploads']['u1']['entries'][0]
     assert entry['logs'] == []
     assert entry['log_stats'] == {
@@ -373,6 +409,7 @@ async def test_reprocess_uploads_workflow(monkeypatch):
 
     monkeypatch.setattr(f'{ACTIVITIES_MODULE}.Upload', FakeUploadAPI)
     monkeypatch.setattr(f'{ACTIVITIES_MODULE}.asyncio.sleep', fake_sleep)
+    _patch_summary_upload(monkeypatch, FakeUpload('reprocessing-upload', n_entries=0))
     _patch_summary_config(monkeypatch, threshold=200)
 
     task_queue = 'test-reprocess-uploads-workflow'
@@ -386,7 +423,6 @@ async def test_reprocess_uploads_workflow(monkeypatch):
             result = await env.client.execute_workflow(
                 ReprocessUploadsWorkflow.run,
                 ReprocessUploadsWorkflowInput(
-                    upload_id='context-upload',
                     user_id='user-id',
                     upload_ids=['u1', 'u2'],
                 ),
@@ -394,6 +430,11 @@ async def test_reprocess_uploads_workflow(monkeypatch):
                 task_queue=task_queue,
             )
             assert result == {
+                'summary_upload_id': 'reprocessing-upload',
+                'summary_file': 'reprocessing_summary_test-workflow.json',
+                'summary_entry_mainfile': (
+                    'reprocessing_summary_test-workflow.archive.json'
+                ),
                 'uploads': [
                     {
                         'upload_id': 'u1',
@@ -405,5 +446,5 @@ async def test_reprocess_uploads_workflow(monkeypatch):
                         'status': 'SUCCESS',
                         'entry_status': '2 success, 0 failures',
                     },
-                ]
+                ],
             }
