@@ -23,7 +23,7 @@ class ReprocessUploadsWorkflow:
             maximum_attempts=3,
         )
 
-        for upload_id in data.upload_ids:
+        for upload_id in data.target_upload_ids:
             await workflow.execute_activity(
                 reprocess_upload,
                 ReprocessSingleUploadInput(upload_id=upload_id),
@@ -34,9 +34,9 @@ class ReprocessUploadsWorkflow:
         summary = await workflow.execute_activity(
             build_reprocess_summary,
             BuildReprocessSummaryInput(
-                upload_id=data.upload_id,
+                user_id=data.user_id,
                 workflow_id=workflow.info().workflow_id,
-                upload_ids=data.upload_ids,
+                upload_ids=data.target_upload_ids,
             ),
             start_to_close_timeout=timedelta(hours=24),
             retry_policy=retry_policy,

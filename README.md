@@ -15,13 +15,12 @@ The reprocessing action allows you to re-run parsers and normalizers on previous
 
 ### Input Formats
 
-The action accepts multiple upload IDs in two formats:
+The uploads to reprocess are given in `target_upload_ids`, in either of two formats.
 
 **1. Python List (JSON Array)** - Recommended for API/programmatic use:
 ```json
 {
-  "upload_id": "cD35rtcxTkGGS61Xo9KHxg",
-  "upload_ids": [
+  "target_upload_ids": [
     "abc123abc123abc123",
     "def456def456def456",
     "ghi789ghi789ghi789"
@@ -32,12 +31,16 @@ The action accepts multiple upload IDs in two formats:
 **2. Comma-Separated String** - Convenient for CLI/scripts:
 ```json
 {
-  "upload_id": "cD35rtcxTkGGS61Xo9KHxg",
-  "upload_ids": "abc123abc123abc123, def456def456def456, ghi789ghi789ghi789"
+  "target_upload_ids": "abc123abc123abc123, def456def456def456, ghi789ghi789ghi789"
 }
 ```
 
 Both formats are automatically handled by the plugin's input validation.
+
+The optional `upload_id` field is separate: it is the context upload the run is
+associated with (for the per-upload action history), not a reprocess target. The GUI
+auto-fills it when the action is launched from a project, so it normally does not need
+to be set by hand.
 
 ### Triggering via API
 
@@ -47,8 +50,7 @@ Content-Type: application/json
 
 {
   "data": {
-    "upload_id": "cD35rtcxTkGGS61Xo9KHxg",
-    "upload_ids": ["upload_id_1", "upload_id_2", "upload_id_3"]
+    "target_upload_ids": ["upload_id_1", "upload_id_2", "upload_id_3"]
   }
 }
 ```
@@ -71,7 +73,9 @@ The reprocessing action uses Temporal workflows to:
 
 ## Inspecting logs in Kibana
 
-The reprocessing summary is written per upload as `reprocessing_summary_<workflow_id>.json` in the context upload's files. For runs that stay below `summary_entry_threshold` total entries it contains the full per-entry logs; above that threshold the per-entry logs would make the file unmanageable, so the summary keeps only aggregate statistics and a Kibana pointer, and the individual logs are inspected in Kibana instead. This repository ships the pieces to make that log view available.
+Each run writes its summary as `reprocessing_summary_<workflow_id>.json` into a dedicated reprocessing upload owned by the initiating user (named "Reprocessing summaries"), created on first use and reused thereafter. A run can span several uploads, so the summary belongs to this dedicated location rather than to one of the reprocessed uploads; upload files are also permanent, whereas the action-instance storage is pruned over time. The workflow result returns the `summary_upload_id` and `summary_file` so the artifact is easy to locate. For runs that stay below `summary_entry_threshold` total entries the file contains the full per-entry logs; above that threshold the per-entry logs would make the file unmanageable, so the summary keeps only aggregate statistics and a Kibana pointer, and the individual logs are inspected in Kibana instead. This repository ships the pieces to make that log view available.
+
+Alongside the JSON artifact, each run also records a searchable entry in the same upload: a metadata-only archive file `reprocessing_summary_<workflow_id>.archive.json` that is processed into a NOMAD entry. Its standard entry metadata makes the run queryable — `references` holds the reprocessed upload ids (so a run is findable by which uploads it touched, e.g. `references:"<upload_id>"`), `entry_name` labels the run, and `comment` carries compact statistics plus a pointer to the detailed JSON. The entry's creation time records when the run happened. Indexing this entry requires the deployment's upload-processing worker to be running.
 
 NOMAD forwards its structured logs to Elasticsearch through Logstash. Enable this in the deployment's `nomad.yaml` and restart the workers so they pick up the handler:
 
